@@ -4,11 +4,11 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{
         // if you're using WASI, change the .os_tag to .wasi
-        .default_target = .{ .abi = .musl, .os_tag = .freestanding, .cpu_arch = .wasm32 },
+        .default_target = .{ .abi = .musl, .os_tag = .wasi, .cpu_arch = .wasm32 },
     });
     const pdk_module = b.dependency("extism-pdk", .{ .target = target, .optimize = optimize }).module("extism-pdk");
     var plugin = b.addExecutable(.{
-        .name = "zig-pdk-template",
+        .name = "boot-filer",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) !void {
     plugin.root_module.addImport("extism-pdk", pdk_module);
 
     b.installArtifact(plugin);
-    const plugin_example_step = b.step("zig-pdk-template", "Build plugin");
+    const plugin_example_step = b.step("boot-filer", "Build plugin");
     plugin_example_step.dependOn(b.getInstallStep());
 
     // Run test using extism CLI
