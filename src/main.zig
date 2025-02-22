@@ -23,7 +23,7 @@ const Filer = struct {
     spec: ?Spec = null,
 };
 
-export fn @"create-file"() i32 {
+export fn createFile() i32 {
     const plugin = Plugin.init(allocator);
     const filename = plugin.getInput() catch unreachable;
     defer allocator.free(filename);
@@ -38,7 +38,7 @@ export fn @"create-file"() i32 {
     return 0;
 }
 
-export fn @"write-file"() i32 {
+export fn writeFile() i32 {
     const plugin = Plugin.init(allocator);
     const Input = struct {
         filename: []u8,
@@ -55,7 +55,7 @@ export fn @"write-file"() i32 {
     return 0;
 }
 
-export fn @"create-folder"() i32 {
+export fn createFolder() i32 {
     const plugin = Plugin.init(allocator);
     const foldername = plugin.getInput() catch unreachable;
     defer allocator.free(foldername);
@@ -80,29 +80,35 @@ fn parseConfigFolderStruct(str: []u8) anyerror![]Filer {
     return params.value;
 }
 
-export fn @"create-folder-struct"() callconv(.C) i32 {
+export fn createFolderStruct() callconv(.C) i32 {
     const plugin = Plugin.init(allocator);
 
     const config = plugin.getConfig("folder_struct") catch |err| {
         return handleErr(plugin, "this action requires a folder_struct to be defined", err);
     };
     if (config) |conf| {
-        plugin.log(.Info, std.fmt.allocPrint(allocator, "{s}", .{conf}) catch unreachable);
         const filers = parseConfigFolderStruct(conf) catch |err| {
             return handleErr(plugin, "failed to parse folder_struct", err);
         };
 
-        return create_folder_struct(plugin, filers, cwd);
+        return create_folder_struct(plugin, filers, null);
     }
 
     return 0;
 }
 
-fn create_folder_struct(plugin: Plugin, filers: []Filer, current: fs.Dir) i32 {
+fn create_folder_struct(plugin: Plugin, filers: []Filer, current: ?[]const u8) i32 {
     for (filers) |filer| {
         switch (filer.type) {
             .file => {
-                const fd = current.createFile(filer.name, .{ .read = true, .truncate = true }) catch |err| {
+                var currentDir: fs.Dir = cwd;
+                if (current) |sub| {
+                    currentDir = cwd.openDir(sub, .{}) catch |err| {
+                        const out = std.fmt.allocPrint(allocator, "failed to open dir {s}", .{filer.name}) catch unreachable;
+                        return handleErr(plugin, out, err);
+                    };
+                }
+                const fd = currentDir.createFile(filer.name, .{ .read = true, .truncate = true }) catch |err| {
                     const out = std.fmt.allocPrint(allocator, "failed to create file {s}", .{filer.name}) catch unreachable;
                     return handleErr(plugin, out, err);
                 };
@@ -118,13 +124,26 @@ fn create_folder_struct(plugin: Plugin, filers: []Filer, current: fs.Dir) i32 {
                 }
             },
             .folder => {
-                const next = current.makeOpenPath(filer.name, .{ .access_sub_paths = true }) catch |err| {
-                    const out = std.fmt.allocPrint(allocator, "failed to create folder {s}", .{filer.name}) catch unreachable;
-                    return handleErr(plugin, out, err);
+                var p: []const u8 = "";
+                if (current) |currentPath| {
+                    p = currentPath;
+                }
+                p = fs.path.join(allocator, &[_][]const u8{ p, filer.name }) catch |err| {
+                    const out = std.fmt.allocPrint(allocator, "Failed to join path '{s}': {s}", .{ filer.name, @errorName(err) }) catch unreachable;
+                    plugin.setError(out);
+                    return 1;
+                };
+                cwd.makeDir(p) catch |err| {
+                    const out = std.fmt.allocPrint(allocator, "Failed to create folder '{s}': {s}", .{ filer.name, @errorName(err) }) catch unreachable;
+                    plugin.setError(out);
+                    return 1;
                 };
                 if (filer.spec) |spec| {
                     if (spec.children.len != 0) {
-                        return create_folder_struct(plugin, spec.children, next);
+                        const ret = create_folder_struct(plugin, spec.children, p);
+                        if (ret == 1) {
+                            return ret;
+                        }
                     }
                 }
             },
